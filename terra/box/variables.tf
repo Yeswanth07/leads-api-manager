@@ -4,7 +4,7 @@
 variable "project_prefix" {
   description = "Prefix to be used for all resource names"
   type        = string
-  default = "leads"
+  default     = "leads"
 }
 
 # ──────────────────────────────────────────────
@@ -26,13 +26,19 @@ variable "vpc_cidr" {
 }
 
 variable "public_subnet_cidr" {
-  description = "CIDR block for Public Subnet"
+  description = "CIDR block for the Public Subnet (Bastion + Nginx)"
   type        = string
   default     = "10.0.1.0/24"
 }
 
+variable "private_subnet_cidr" {
+  description = "CIDR block for the Private Subnet (Consolidated Backend)"
+  type        = string
+  default     = "10.0.2.0/24"
+}
+
 variable "availability_zone" {
-  description = "AZ for Public Subnet"
+  description = "Availability Zone for subnets"
   type        = string
   default     = "us-west-2a"
 }
@@ -41,26 +47,34 @@ variable "availability_zone" {
 # EC2
 # ──────────────────────────────────────────────
 variable "main_instance_type" {
-  description = "EC2 instance type for the main consolidated server"
+  description = "EC2 instance type for the consolidated backend server"
   type        = string
   default     = "t3.xlarge"
 }
 
-variable "key_name" {
-  description = "Name of the existing AWS key pair for SSH access"
+variable "nginx_instance_type" {
+  description = "EC2 instance type for the Nginx reverse proxy"
   type        = string
+  default     = "t2.micro"
 }
 
-# variable "my_ip" {
-#   description = "Your public IP (CIDR format) for SSH access to instances (e.g., 203.0.113.5/32)"
-#   type        = string
-# }
+variable "key_name" {
+  description = "Name of the AWS key pair to create for SSH access"
+  type        = string
+  default     = "leads-key"
+}
+
+variable "consolidated_ip" {
+  description = "Static private IP for the consolidated backend instance"
+  type        = string
+  default     = "10.0.2.10"
+}
 
 # ──────────────────────────────────────────────
 # Application
 # ──────────────────────────────────────────────
 variable "docker_image" {
-  description = "ECR image for the application"
+  description = "ECR image URI for the Leads Spring Boot application"
   type        = string
 }
 
@@ -94,4 +108,5 @@ variable "es_username" {
 variable "es_password" {
   description = "Elasticsearch password"
   type        = string
+  sensitive   = true
 }

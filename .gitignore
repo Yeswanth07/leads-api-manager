@@ -99,3 +99,6 @@ terra/dev/
 
 # Ignore terraform lock file
 .terraform.lock.hcl
+
+# Ignore .pem files
+*.pem

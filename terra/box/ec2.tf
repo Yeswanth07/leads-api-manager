@@ -17,170 +17,129 @@ data "aws_ami" "ubuntu" {
 }
 
 # ──────────────────────────────────────────────
-# EC2: Main Consolidated Server
+# SSH Key Pair (auto-generated)
+# ──────────────────────────────────────────────
+resource "tls_private_key" "ssh" {
+  algorithm = "RSA"
+  rsa_bits  = 4096
+}
+
+resource "aws_key_pair" "generated" {
+  key_name   = var.key_name
+  public_key = tls_private_key.ssh.public_key_openssh
+}
+
+resource "local_file" "private_key" {
+  content         = tls_private_key.ssh.private_key_pem
+  filename        = "${path.module}/${var.key_name}.pem"
+  file_permission = "0400"
+}
+
+# ──────────────────────────────────────────────
+# EC2: Bastion Host (Public Subnet)
+# Provides secure SSH access to the private backend
+# ──────────────────────────────────────────────
+resource "aws_instance" "bastion" {
+  ami                         = data.aws_ami.ubuntu.id
+  instance_type               = "t2.micro"
+  key_name                    = aws_key_pair.generated.key_name
+  subnet_id                   = aws_subnet.public.id
+  vpc_security_group_ids      = [aws_security_group.bastion.id]
+  associate_public_ip_address = true
+
+  tags = {
+    Name = "${var.project_prefix}-bastion"
+    Role = "bastion"
+  }
+}
+
+# ──────────────────────────────────────────────
+# EC2: Nginx Reverse Proxy (Public Subnet)
+# Routes external traffic to the private backend
+# ──────────────────────────────────────────────
+resource "aws_instance" "nginx" {
+  ami                         = data.aws_ami.ubuntu.id
+  instance_type               = var.nginx_instance_type
+  key_name                    = aws_key_pair.generated.key_name
+  subnet_id                   = aws_subnet.public.id
+  vpc_security_group_ids      = [aws_security_group.nginx.id]
+  associate_public_ip_address = true
+
+  user_data = templatefile("${path.module}/templates/nginx_user_data.sh.tpl", {
+    backend_ip           = var.consolidated_ip
+    app_port             = 8080
+    pgadmin_port         = 5050
+    redis_commander_port = 8081
+    kibana_port          = 5601
+  })
+
+  tags = {
+    Name = "${var.project_prefix}-nginx"
+    Role = "nginx"
+  }
+
+  depends_on = [
+    aws_internet_gateway.leads,
+    aws_instance.main
+  ]
+}
+
+resource "aws_eip" "nginx" {
+  instance = aws_instance.nginx.id
+  domain   = "vpc"
+
+  tags = {
+    Name = "${var.project_prefix}-nginx-eip"
+  }
+
+  depends_on = [aws_internet_gateway.leads]
+}
+
+# ──────────────────────────────────────────────
+# EC2: Main Consolidated Server (Private Subnet)
+# Runs ALL services: PostgreSQL, Redis, Elasticsearch,
+#                    pgAdmin, Redis Commander, Kibana, Spring App
 # ──────────────────────────────────────────────
 resource "aws_instance" "main" {
-  ami                    = data.aws_ami.ubuntu.id
-  instance_type          = var.main_instance_type
-  key_name               = var.key_name
-  subnet_id              = aws_subnet.public.id
-  vpc_security_group_ids = [aws_security_group.main.id]
+  ami           = data.aws_ami.ubuntu.id
+  instance_type = var.main_instance_type
+  key_name      = aws_key_pair.generated.key_name
+
+  # Private subnet — no public IP
+  subnet_id                   = aws_subnet.private.id
+  vpc_security_group_ids      = [aws_security_group.private.id]
+  associate_public_ip_address = false
+
+  # Using IAM Instance Profile for ECR access
   iam_instance_profile = "EC2-ECR-Read-Role"
 
+  # Assign a static private IP so the Nginx proxy always knows where to find it
+  private_ip = var.consolidated_ip
+
+  # Larger root volume for all Docker images + volumes
   root_block_device {
-    volume_size = 40
+    volume_size = 60
     volume_type = "gp3"
   }
 
-  user_data = <<-EOF
-    #!/bin/bash
-    set -e
+  # Use base64gzip to keep user_data well within the 16KB limit
+  user_data_base64 = base64gzip(templatefile("${path.module}/templates/consolidated_user_data.sh.tpl", {
+    project_prefix = var.project_prefix
+    aws_region     = var.aws_region
+    docker_image   = var.docker_image
 
-    # Increase vm.max_map_count (required by Elasticsearch)
-    sysctl -w vm.max_map_count=262144
-    echo "vm.max_map_count=262144" >> /etc/sysctl.conf
-
-    # Install Docker, Docker Compose, and AWS CLI
-    apt-get update -y
-    apt-get install -y docker.io docker-compose awscli
-    systemctl start docker
-    systemctl enable docker
-    usermod -aG docker ubuntu
-
-    # Login to ECR
-    ECR_REGISTRY=$(echo "${var.docker_image}" | cut -d'/' -f1)
-    aws ecr get-login-password --region ${var.aws_region} | docker login --username AWS --password-stdin $ECR_REGISTRY
-
-    mkdir -p /opt/${var.project_prefix}
-    cd /opt/${var.project_prefix}
-
-    # Create servers.json for pgAdmin
-    cat << 'JSON_EOF' > servers.json
-    {
-      "Servers": {
-        "1": {
-          "Name": "${var.project_prefix} DB",
-          "Group": "Servers",
-          "Host": "postgres",
-          "Port": 5432,
-          "MaintenanceDB": "postgres",
-          "Username": "${var.db_username}",
-          "SSLMode": "prefer"
-        }
-      }
-    }
-    JSON_EOF
-
-    # Create docker-compose.yml
-    cat << 'COMPOSE_EOF' > docker-compose.yml
-    version: '3.8'
-
-    services:
-      postgres:
-        image: postgres:16
-        container_name: ${var.project_prefix}-postgres
-        environment:
-          POSTGRES_DB: ${var.db_name}
-          POSTGRES_USER: ${var.db_username}
-          POSTGRES_PASSWORD: ${var.db_password}
-        ports:
-          - "5432:5432"
-        volumes:
-          - pgdata:/var/lib/postgresql/data
-        restart: always
-
-      redis:
-        image: redis:7-alpine
-        container_name: ${var.project_prefix}-redis
-        ports:
-          - "6379:6379"
-        volumes:
-          - redisdata:/data
-        restart: always
-
-      elasticsearch:
-        image: elasticsearch:8.13.0
-        container_name: ${var.project_prefix}-elasticsearch
-        environment:
-          - discovery.type=single-node
-          - xpack.security.enabled=false
-          - ES_JAVA_OPTS=-Xms1g -Xmx1g
-        ports:
-          - "9200:9200"
-          - "9300:9300"
-        volumes:
-          - esdata:/usr/share/elasticsearch/data
-        restart: always
-
-      pgadmin:
-        image: dpage/pgadmin4
-        container_name: ${var.project_prefix}-pgadmin
-        environment:
-          PGADMIN_DEFAULT_EMAIL: admin@admin.com
-          PGADMIN_DEFAULT_PASSWORD: admin
-          PGADMIN_SERVER_JSON_FILE: /pgadmin4/servers.json
-        ports:
-          - "5050:80"
-        volumes:
-          - ./servers.json:/pgadmin4/servers.json
-        depends_on:
-          - postgres
-        restart: always
-
-      redis-commander:
-        image: rediscommander/redis-commander:latest
-        container_name: ${var.project_prefix}-redis-commander
-        environment:
-          - REDIS_HOSTS=local:redis:6379
-        ports:
-          - "8081:8081"
-        depends_on:
-          - redis
-        restart: always
-
-      kibana:
-        image: kibana:8.13.0
-        container_name: ${var.project_prefix}-kibana
-        environment:
-          - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
-        ports:
-          - "5601:5601"
-        depends_on:
-          - elasticsearch
-        restart: always
-
-      app:
-        image: ${var.docker_image}
-        container_name: ${var.project_prefix}-app
-        environment:
-          SPRING_DATASOURCE_URL: jdbc:postgresql://${var.project_prefix}-postgres:5432/${var.db_name}
-          SPRING_DATASOURCE_USERNAME: ${var.db_username}
-          SPRING_DATASOURCE_PASSWORD: ${var.db_password}
-          SPRING_REDIS_HOST: ${var.project_prefix}-redis
-          SPRING_REDIS_PORT: 6379
-          ELASTICSEARCH_HOST: ${var.project_prefix}-elasticsearch
-          ELASTICSEARCH_PORT: 9200
-          ELASTICSEARCH_USERNAME: ${var.es_username}
-          ELASTICSEARCH_PASSWORD: ${var.es_password}
-        ports:
-          - "8080:8080"
-        depends_on:
-          - postgres
-          - redis
-          - elasticsearch
-        restart: always
-
-    volumes:
-      pgdata:
-      redisdata:
-      esdata:
-    COMPOSE_EOF
-
-    # Start the stack
-    docker-compose up -d
-  EOF
+    # DB credentials
+    db_name     = var.db_name
+    db_username = var.db_username
+    db_password = var.db_password
+    es_username = var.es_username
+    es_password = var.es_password
+  }))
 
   tags = {
     Name = "${var.project_prefix}-main"
+    Role = "all-in-one"
   }
+
+  depends_on = [aws_route_table_association.private]
 }

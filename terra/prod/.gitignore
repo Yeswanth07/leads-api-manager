@@ -1,0 +1,17 @@
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.backup
+*.tfstate.*.backup
+.terraform.lock.hcl
+
+# Sensitive files
+terraform.tfvars
+*.pem
+
+# Kubernetes secrets (contains real credentials)
+k8/00-secrets.yaml
+
+# OS
+.DS_Store
+Thumbs.db

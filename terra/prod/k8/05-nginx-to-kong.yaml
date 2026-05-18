@@ -1,0 +1,28 @@
+# ==================================
+# Phase 2: NGINX -> Kong Routing
+# ==================================
+# This Ingress rule is processed by NGINX (the edge router).
+# It routes all incoming traffic from the AWS NLB to the Kong Proxy Service.
+
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: nginx-to-kong
+  namespace: kong
+  annotations:
+    nginx.ingress.kubernetes.io/use-regex: "true"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "120"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "120"
+    nginx.ingress.kubernetes.io/proxy-body-size: "50m"
+spec:
+  ingressClassName: nginx
+  rules:
+    - http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: kong-kong-proxy
+                port:
+                  number: 80

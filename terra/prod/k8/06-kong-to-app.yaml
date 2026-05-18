@@ -1,0 +1,64 @@
+# ==================================
+# Phase 2: Kong -> App Routing & Policies
+# ==================================
+
+# 1. Kong Plugin: Rate Limiting
+# We define a rate limiting policy restricting traffic to 5 requests per minute per IP.
+apiVersion: configuration.konghq.com/v1
+kind: KongPlugin
+metadata:
+  name: rate-limit-initiate
+  namespace: default
+config:
+  minute: 5
+  limit_by: ip
+  policy: local
+plugin: rate-limiting
+
+---
+# 2. Ingress for /leads/v1/initiate (Protected Route)
+# This route specifically attaches the Rate Limiting plugin.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: kong-to-leads-app-initiate
+  namespace: default
+  annotations:
+    konghq.com/plugins: rate-limit-initiate
+    konghq.com/strip-path: "false"
+spec:
+  ingressClassName: kong
+  rules:
+    - http:
+        paths:
+          - path: /leads/v1/initiate
+            pathType: Prefix
+            backend:
+              service:
+                name: leads-app
+                port:
+                  number: 80
+
+---
+# 3. Ingress for Everything Else (Unprotected Route)
+# This catches all other traffic (like /swagger-ui, /leads/v1/search) 
+# and allows it through without rate limits.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: kong-to-leads-app-default
+  namespace: default
+  annotations:
+    konghq.com/strip-path: "false"
+spec:
+  ingressClassName: kong
+  rules:
+    - http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: leads-app
+                port:
+                  number: 80

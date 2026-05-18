@@ -1,43 +1,69 @@
 # ──────────────────────────────────────────────
-# Application
+# Network
 # ──────────────────────────────────────────────
-output "main_public_ip" {
-  description = "Public IP of the consolidated server"
-  value       = aws_instance.main.public_ip
+output "vpc_id" {
+  description = "The ID of the VPC"
+  value       = aws_vpc.leads.id
 }
 
+# ──────────────────────────────────────────────
+# Public Access
+# ──────────────────────────────────────────────
+output "nginx_public_ip" {
+  description = "Public IP of the Nginx reverse proxy (EIP)"
+  value       = aws_eip.nginx.public_ip
+}
+
+output "bastion_public_ip" {
+  description = "Public IP of the Bastion Host"
+  value       = aws_instance.bastion.public_ip
+}
+
+# ──────────────────────────────────────────────
+# Application URLs (via Nginx)
+# ──────────────────────────────────────────────
 output "app_url" {
-  description = "URL to access the application"
-  value       = "http://${aws_instance.main.public_ip}:8080"
+  description = "Leads API URL via Nginx"
+  value       = "http://${aws_eip.nginx.public_ip}/leads"
+}
+
+output "pgadmin_url" {
+  description = "pgAdmin URL via Nginx (login: admin@admin.com / admin)"
+  value       = "http://${aws_eip.nginx.public_ip}/pgadmin/"
+}
+
+output "redis_commander_url" {
+  description = "Redis Commander URL via Nginx"
+  value       = "http://${aws_eip.nginx.public_ip}/redis/"
+}
+
+output "kibana_url" {
+  description = "Kibana URL via Nginx"
+  value       = "http://${aws_eip.nginx.public_ip}/kibana/"
+}
+
+# ──────────────────────────────────────────────
+# Private Backend
+# ──────────────────────────────────────────────
+output "main_private_ip" {
+  description = "Private IP of the consolidated backend server"
+  value       = aws_instance.main.private_ip
 }
 
 # ──────────────────────────────────────────────
 # SSH Commands
 # ──────────────────────────────────────────────
-output "ssh_main" {
-  description = "SSH command to connect to the main server"
-  value       = "ssh -i batman.pem ubuntu@${aws_instance.main.public_ip}"
+output "ssh_bastion" {
+  description = "SSH command to connect to the Bastion Host"
+  value       = "ssh -i ${local_file.private_key.filename} ubuntu@${aws_instance.bastion.public_ip}"
 }
 
-# ──────────────────────────────────────────────
-# Admin UI URLs
-# ──────────────────────────────────────────────
-output "pgadmin_url" {
-  description = "pgAdmin URL (login: admin@admin.com / admin)"
-  value       = "http://${aws_instance.main.public_ip}:5050"
+output "ssh_main_via_bastion" {
+  description = "SSH command to reach the private backend via Bastion (ProxyJump)"
+  value       = "ssh -i ${local_file.private_key.filename} -J ubuntu@${aws_instance.bastion.public_ip} ubuntu@${aws_instance.main.private_ip}"
 }
 
-output "redis_commander_url" {
-  description = "Redis Commander URL"
-  value       = "http://${aws_instance.main.public_ip}:8081"
-}
-
-output "kibana_url" {
-  description = "Kibana URL"
-  value       = "http://${aws_instance.main.public_ip}:5601"
-}
-
-output "elasticvue_es_url" {
-  description = "Elasticsearch URL for Elasticvue browser extension"
-  value       = "http://${aws_instance.main.public_ip}:9200"
+output "private_key_file" {
+  description = "Path to the generated SSH private key file"
+  value       = local_file.private_key.filename
 }
